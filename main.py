@@ -4,83 +4,93 @@ import re
 from datetime import datetime
 import pytz
 import os
+import time
 
 def get_shanghai_time():
     """获取上海时区的当前时间"""
     tz = pytz.timezone('Asia/Shanghai')
     return datetime.now(tz)
 
-def fetch_cctv_streams():
-    """使用专用CCTV搜索URL抓取直播源"""
-    url = "https://tonkiang.us/?iptv=CCTV"
+def fetch_with_retry(url, max_retries=3, delay=5):
+    """带重试机制的请求函数"""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept-Language': 'zh-CN,zh;q=0.9'
     }
     
-    try:
-        shanghai_time = get_shanghai_time()
-        print(f"当前上海时间: {shanghai_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"请求URL: {url}")
-        
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        # 调试：保存网页内容
-        debug_file = f"debug_{shanghai_time.strftime('%Y%m%d_%H%M%S')}.html"
-        with open(debug_file, 'w', encoding='utf-8') as f:
-            f.write(response.text)
-        print(f"已保存网页内容到 {debug_file}")
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            print(f"请求失败，第 {attempt + 1} 次重试... 错误: {str(e)}")
+            time.sleep(delay)
+    return None
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        streams = []
-        
-        # 针对CCTV搜索结果页面的特定抓取逻辑
-        # 查找包含流媒体链接的结果项
-        for result in soup.select('div.tables'):
-            # 提取频道名称
-            channel_elem = result.find('h4') or result.find('b') or result.find('strong')
-            channel = channel_elem.get_text().strip() if channel_elem else "CCTV频道"
-            
-            # 提取流媒体链接
-            stream_link = result.find('a', href=re.compile(r'\.m3u8|\.flv|\.ts|rtmp:|rtsp:', re.I))
-            if stream_link:
-                streams.append({
-                    'channel': channel,
-                    'url': stream_link['href']
-                })
-        
-        # 如果上面方法没找到，尝试备用方法
-        if not streams:
-            print("主方法未找到，尝试备用方法...")
-            for a in soup.find_all('a', href=re.compile(r'\.m3u8|\.flv|\.ts|rtmp:|rtsp:', re.I)):
-                parent_text = a.find_parent().get_text().upper()
-                if 'CCTV' in parent_text:
-                    streams.append({
-                        'channel': ' '.join(a.find_parent().stripped_strings),
-                        'url': a['href']
-                    })
-        
-        # 去重
-        unique_streams = []
-        seen = set()
-        for s in streams:
-            ident = f"{s['channel']}_{s['url']}"
-            if ident not in seen:
-                seen.add(ident)
-                unique_streams.append(s)
-        
-        print(f"找到 {len(unique_streams)} 个CCTV直播源")
-        return unique_streams
+def fetch_cctv_streams():
+    """抓取CCTV直播源"""
+    urls_to_try = [
+        "https://tonkiang.us/?iptv=CCTV",
+        "http://tonkiang.us/?iptv=CCTV",  # 尝试HTTP协议
+        "https://tonkiang.us/hoteliptv.php?iptv=CCTV"  # 备用路径
+    ]
     
-    except Exception as e:
-        print(f"抓取失败: {str(e)}")
-        return []
+    shanghai_time = get_shanghai_time()
+    print(f"当前上海时间: {shanghai_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    for url in urls_to_try:
+        print(f"\n尝试URL: {url}")
+        try:
+            response = fetch_with_retry(url)
+            debug_file = f"debug_{shanghai_time.strftime('%Y%m%d_%H%M%S')}.html"
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write(response.text)
+            print(f"成功获取页面内容，已保存到 {debug_file}")
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            streams = []
+            
+            # 方法1：查找表格中的频道
+            for row in soup.select('div.row, tr'):
+                if 'CCTV' in row.get_text().upper():
+                    link = row.find('a', href=re.compile(r'\.m3u8|\.flv|\.ts|rtmp:|rtsp:', re.I))
+                    if link:
+                        channel = re.sub(r'\s+', ' ', row.get_text()).strip()
+                        streams.append({
+                            'channel': channel[:100],  # 限制长度
+                            'url': link['href']
+                        })
+            
+            # 方法2：直接搜索所有链接
+            if not streams:
+                for a in soup.find_all('a', href=re.compile(r'\.m3u8|\.flv|\.ts|rtmp:|rtsp:', re.I)):
+                    if 'CCTV' in a.get_text().upper():
+                        streams.append({
+                            'channel': a.get_text().strip(),
+                            'url': a['href']
+                        })
+            
+            if streams:
+                print(f"从 {url} 找到 {len(streams)} 个直播源")
+                return streams
+            
+        except Exception as e:
+            print(f"URL {url} 抓取失败: {str(e)}")
+            continue
+    
+    print("所有URL尝试均失败")
+    return []
 
 def save_to_file(streams):
     """保存结果到文件"""
     if not streams:
         print("没有找到可用的直播源")
+        # 创建空文件以便GitHub Actions可以提交
+        with open('CCTV.txt', 'w', encoding='utf-8') as f:
+            f.write("# 本次未找到可用直播源\n")
         return False
     
     with open('CCTV.txt', 'w', encoding='utf-8') as f:
@@ -90,8 +100,7 @@ def save_to_file(streams):
         f.write("# 格式: 频道,链接\n\n")
         
         for stream in streams:
-            # 清理频道名称中的多余空格和换行
-            clean_channel = ' '.join(stream['channel'].split())
+            clean_channel = re.sub(r'[\n\r\t]+', ' ', stream['channel']).strip()
             f.write(f"{clean_channel},{stream['url']}\n")
     
     print("结果已保存到 CCTV.txt")
@@ -101,10 +110,18 @@ if __name__ == "__main__":
     streams = fetch_cctv_streams()
     file_saved = save_to_file(streams)
     
+    # 确保文件存在
+    if not os.path.exists('CCTV.txt'):
+        with open('CCTV.txt', 'w') as f:
+            f.write("# 自动创建的空文件\n")
+
     # GitHub Actions 自动提交
-    if file_saved and os.getenv('GITHUB_ACTIONS') == 'true':
-        os.system('git config --global user.name "GitHub Actions"')
-        os.system('git config --global user.email "actions@github.com"')
-        os.system('git add CCTV.txt debug_*.html')
-        os.system('git commit -m "自动更新CCTV直播源"')
-        os.system('git push')
+    if os.getenv('GITHUB_ACTIONS') == 'true':
+        try:
+            os.system('git config --global user.name "GitHub Actions"')
+            os.system('git config --global user.email "actions@github.com"')
+            os.system('git add CCTV.txt debug_*.html')
+            os.system('git commit -m "自动更新CCTV直播源" || echo "没有变化可提交"')
+            os.system('git push')
+        except Exception as e:
+            print(f"Git提交出错: {str(e)}")
