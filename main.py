@@ -26,27 +26,32 @@ def fetch_cctv_streams():
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         
+        # 调试：保存网页内容
+        debug_file = f"debug_{shanghai_time.strftime('%Y%m%d_%H%M%S')}.html"
+        with open(debug_file, 'w', encoding='utf-8') as f:
+            f.write(response.text)
+        print(f"已保存网页内容到 {debug_file}")
+
         soup = BeautifulSoup(response.text, 'html.parser')
         streams = []
         
-        # 针对搜索结果页面的特定抓取逻辑
-        for result in soup.select('div.resultplus'):
-            # 提取频道名称
-            channel_elem = result.select_one('div.channel div.tip')
-            if not channel_elem:
-                continue
-                
-            channel = channel_elem.get_text().strip()
+        # 查找所有包含CCTV的频道块
+        for item in soup.find_all('a', string=re.compile('CCTV')):
+            # 获取频道名称
+            channel = item.get_text(strip=True)
             
-            # 提取流媒体链接 - 查找包含链接的tba元素
-            link_elem = result.select_one('tba.irya')
-            if link_elem:
-                url = link_elem.get_text().strip()
-                if re.search(r'\.m3u8|\.flv|\.ts|rtmp:|rtsp:', url, re.I):
-                    streams.append({
-                        'channel': channel,
-                        'url': url
-                    })
+            # 查找流媒体链接 - 在父元素中查找包含链接的文本
+            parent = item.find_parent()
+            if parent:
+                # 查找包含http的文本
+                link_text = parent.find(string=re.compile(r'http[s]?://'))
+                if link_text:
+                    url = link_text.strip()
+                    if re.search(r'\.m3u8|\.flv|\.ts|rtmp:|rtsp:', url, re.I):
+                        streams.append({
+                            'channel': channel,
+                            'url': url
+                        })
         
         # 去重
         unique_streams = []
@@ -80,6 +85,7 @@ def save_to_file(streams):
         f.write("# 格式: 频道,链接\n\n")
         
         for stream in streams:
+            # 清理频道名称中的多余空格和换行
             clean_channel = re.sub(r'[\n\r\t]+', ' ', stream['channel']).strip()
             f.write(f"{clean_channel},{stream['url']}\n")
     
