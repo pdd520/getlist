@@ -39,10 +39,6 @@ http://walkershb.synology.me:888/rtp/239.49.8.137:6000
 http://walkershb.synology.me:888/rtp/239.49.0.5:9570
 #EXTINF:-1,CCTV5体育频道
 http://walkershb.synology.me:888/rtp/239.49.1.5:6000
-#EXTINF:-1,CCTV5-标清?
-http://walkershb.synology.me:888/rtp/239.49.1.190:6000
-#EXTINF:-1,CCTV5-标清2?
-http://walkershb.synology.me:888/rtp/239.49.1.192:6000
 #EXTINF:-1,CCTV6电影频道
 http://walkershb.synology.me:888/rtp/239.49.0.6:9574
 #EXTINF:-1,CCTV6电影频道
